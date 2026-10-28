@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Time Management Ratio Bar</title>
+    
+    <!-- Fonts and Styling -->
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React and Babel -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Expose Firebase tools globally for our React app to use safely
+        window.firebase = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, getDoc, setDoc, onSnapshot };
+    </script>
+
+    <style>
+        body {
+            font-family: 'Space Mono', monospace;
+            background-color: #050505;
+            color: #f5f5f5;
+            margin: 0;
+            padding: 0;
+        }
+        
+        .font-sage {
+            font-family: 'Playfair Display', serif;
+            color: #b0beb8;
+        }
+
+        .font-typewriter {
+            font-family: 'Space Mono', monospace;
+        }
+        
+        /* Custom styling for range sliders */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 18px;
+            width: 8px;
+            border-radius: 0;
+            background: #ffffff;
+            cursor: pointer;
+            margin-top: -7px;
+            box-shadow: 0 0 0 1px #050505;
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: #2a2a2a;
+            border-radius: 0;
+        }
+        
+        input[type=range]:focus {
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // Pre-defined pleasant color palette for classes
+        const CLASS_COLORS = [
+            '#f87171', // Red
+            '#60a5fa', // Blue
+            '#4ade80', // Green
+            '#facc15', // Yellow
+            '#c084fc', // Purple
+            '#f472b6'  // Pink
+        ];
+
+        function App() {
+            const [isSetup, setIsSetup] = React.useState(true);
+            const [totalHours, setTotalHours] = React.useState(40);
+            const [setupClasses, setSetupClasses] = React.useState([{id: Date.now(), name: 'Class 1'}]);
+            const [classes, setClasses] = React.useState([]);
+            const [major, setMajor] = React.useState('');
+            const [dragEnabled, setDragEnabled] = React.useState(null);
+            
+            // Cloud sync state variables
+            const [isAuthReady, setIsAuthReady] = React.useState(false);
+            const [userId, setUserId] = React.useState(null);
+            const [syncStatus, setSyncStatus] = React.useState('Connecting to Cloud...');
+
+            // Drag and drop references
+            const dragItem = React.useRef(null);
+            const dragOverItem = React.useRef(null);
+
+            // Initialize Firebase Authentication & Cloud Sync listener
+            React.useEffect(() => {
+                const initFirebase = async () => {
+                    if (!window.firebase) {
+                        setTimeout(initFirebase, 200);
+                        return;
+                    }
+
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, getFirestore, doc, onSnapshot } = window.firebase;
+                    
+                    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-time-app-id';
+                    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+                        apiKey: "AIzaSyMockKeyForLocalTestingFallback",
+                        authDomain: "mock-project.firebaseapp.com",
+                        projectId: "mock-project",
+                        storageBucket: "mock-project.appspot.com",
+                        messagingSenderId: "123456789",
+                        appId: "1:123:web:abc"
+                    };
+
+                    try {
+                        const app = initializeApp(firebaseConfig);
+                        const auth = getAuth(app);
+                        const db = getFirestore(app);
+
+                        // Authenticate securely
+                        const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : undefined;
+                        if (token) {
+                            await signInWithCustomToken(auth, token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+
+                        const currentUid = auth.currentUser?.uid || crypto.randomUUID();
+                        setUserId(currentUid);
+                        setIsAuthReady(true);
+                        setSyncStatus('Cloud Synced');
+
+                        // Real-time listener for user data
+                        const docRef = doc(db, 'artifacts', appId, 'users', currentUid, 'settings', 'userConfig');
+                        onSnapshot(docRef, (docSnap) => {
+                            if (docSnap.exists()) {
+                                const data = docSnap.data();
+                                if (data.classes && data.classes.length > 0) {
+                                    setClasses(data.classes);
+                                    setTotalHours(data.totalHours || 40);
+                                    setMajor(data.major || '');
+                                    setIsSetup(false); // If data exists, jump directly to dashboard
+                                }
+                            }
+                        }, (error) => {
+                            console.error("Cloud sync error:", error);
+                            setSyncStatus('Cloud Sync Offline (Local mode)');
+                        });
+
+                    } catch (err) {
+                        console.error("Initialization error:", err);
+                        setSyncStatus('Offline mode active');
+                        setIsAuthReady(true);
+                    }
+                };
+
+                initFirebase();
+            }, []);
+
+            // Function to save state to cloud database
+            const saveToCloud = async (newClasses, newTotal, newMajor, newIsSetup) => {
+                if (!isAuthReady || !userId || !window.firebase) return;
+                
+                const { getFirestore, doc, setDoc } = window.firebase;
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-time-app-id';
+                const db = getFirestore(window.firebase.getAuth().app);
+                
+                setSyncStatus('Saving...');
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'users', userId, 'settings', 'userConfig');
+                    await setDoc(docRef, {
+                        classes: newClasses,
+                        totalHours: newTotal,
+                        major: newMajor,
+                        updatedAt: new Date().toISOString()
+                    });
+                    setSyncStatus('Cloud Synced');
+                } catch (e) {
+                    console.error("Error saving data:", e);
+                    setSyncStatus('Save failed');
+                }
+            };
+
+            const addSetupClass = () => {
+                if (setupClasses.length < 6) {
+                    setSetupClasses([...setupClasses, { id: Date.now(), name: `Class ${setupClasses.length + 1}` }]);
+                }
+            };
+
+            const removeSetupClass = (index) => {
+                if (setupClasses.length > 1) {
+                    setSetupClasses(setupClasses.filter((_, i) => i !== index));
+                }
+            };
+
+            const updateSetupClassName = (index, newName) => {
+                const newClasses = [...setupClasses];
+                newClasses[index].name = newName;
+                setSetupClasses(newClasses);
+            };
+
+            // Generate initial classes and save to cloud
+            const handleStart = () => {
+                const hours = Math.max(1, totalHours);
+                const count = setupClasses.length;
+                let hoursPerClass = hours / count;
+                
+                let initialClasses = setupClasses.map((cls, i) => ({
+                    id: cls.id,
+                    name: cls.name,
+                    hours: hoursPerClass,
+                    color: CLASS_COLORS[i],
+                    isPinned: false
+                }));
+                
+                setTotalHours(hours);
+                setClasses(initialClasses);
+                setIsSetup(false);
+                saveToCloud(initialClasses, hours, major, false);
+            };
+
+            // Handle sorting via drag and drop
+            const handleSort = () => {
+                if (dragItem.current === null || dragOverItem.current === null) return;
+                
+                const _classes = [...classes];
+                const draggedItemContent = _classes.splice(dragItem.current, 1)[0];
+                _classes.splice(dragOverItem.current, 0, draggedItemContent);
+                
+                dragItem.current = null;
+                dragOverItem.current = null;
+                setClasses(_classes);
+                saveToCloud(_classes, totalHours, major, false);
+            };
+
+            const handleNameChange = (index, newName) => {
+                const newClasses = [...classes];
+                newClasses[index].name = newName;
+                setClasses(newClasses);
+                saveToCloud(newClasses, totalHours, major, false);
+            };
+
+            const togglePin = (index) => {
+                const newClasses = [...classes];
+                newClasses[index].isPinned = !newClasses[index].isPinned;
+                setClasses(newClasses);
+                saveToCloud(newClasses, totalHours, major, false);
+            };
+
+            const findNeighbor = (classesState, index) => {
+                const numClasses = classesState.length;
+                for (let i = index + 1; i < numClasses; i++) {
+                    if (!classesState[i].isPinned) return i;
+                }
+                for (let i = index - 1; i >= 0; i--) {
+                    if (!classesState[i].isPinned) return i;
+                }
+                return -1;
+            };
+
+            const handleSliderChange = (index, newValue) => {
+                const numClasses = classes.length;
+                if (numClasses === 1) return;
+
+                const parsedValue = parseFloat(newValue);
+                const newClasses = [...classes];
+                
+                if (newClasses[index].isPinned) return;
+
+                const neighborIndex = findNeighbor(newClasses, index);
+                if (neighborIndex === -1) return;
+                
+                const currentVal = newClasses[index].hours;
+                const delta = parsedValue - currentVal;
+                
+                if (delta === 0) return;
+                if (newClasses[neighborIndex].hours - delta < 0) return;
+                
+                newClasses[index].hours += delta;
+                newClasses[neighborIndex].hours -= delta;
+                
+                setClasses(newClasses);
+                saveToCloud(newClasses, totalHours, major, false);
+            };
+
+            const getGreeting = (majorText) => {
+                if (!majorText || majorText.trim() === '') return "Welcome to your Dashboard.";
+                const m = majorText.toLowerCase();
+                if (m.includes('med') || m.includes('doctor') || m.includes('nurs')) return "Hello, future doctor.";
+                if (m.includes('engin')) return "Hello, future engineer.";
+                if (m.includes('law') || m.includes('attorney')) return "Hello, future lawyer.";
+                if (m.includes('art') || m.includes('design')) return "Hello, future artist.";
+                if (m.includes('busin') || m.includes('financ') || m.includes('account')) return "Hello, future business leader.";
+                if (m.includes('comp') || m.includes('tech') || m.includes('cs') || m.includes('program')) return "Hello, future tech innovator.";
+                if (m.includes('teach') || m.includes('edu')) return "Hello, future educator.";
+                if (m.includes('sci') || m.includes('bio') || m.includes('chem') || m.includes('phys')) return "Hello, future scientist.";
+                
+                return `Hello, future ${majorText} expert.`;
+            };
+
+            const resetSetup = () => {
+                setIsSetup(true);
+            };
+
+            // ---------------- Render Setup View ----------------
+            if (isSetup) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center p-4">
+                        <div className="bg-[#0b0b0b] border border-[#222] p-10 max-w-lg w-full relative">
+                            {/* Decorative corner accents */}
+                            <div className="absolute top-0 left-0 w-2 h-2 border-t border-l border-[#b0beb8]"></div>
+                            <div className="absolute top-0 right-0 w-2 h-2 border-t border-r border-[#b0beb8]"></div>
+                            <div className="absolute bottom-0 left-0 w-2 h-2 border-b border-l border-[#b0beb8]"></div>
+                            <div className="absolute bottom-0 right-0 w-2 h-2 border-b border-r border-[#b0beb8]"></div>
+
+                            <div className="mb-10 text-center">
+                                <h1 className="font-sage text-3xl mb-3 text-white font-bold">System Configuration</h1>
+                                <p className="font-typewriter text-[10px] text-[#d4d4d4] uppercase tracking-[0.2em]">Initialize your operational parameters</p>
+                                <div className="mt-2 text-[9px] text-[#b0beb8] tracking-widest uppercase">[{syncStatus}]</div>
+                            </div>
+                            
+                            <div className="space-y-8">
+                                <div>
+                                    <label className="block text-[11px] font-bold uppercase tracking-widest text-[#e5e5e5] mb-2">
+                                        Field of Study / Major
+                                    </label>
+                                    <input 
+                                        type="text" 
+                                        value={major}
+                                        onChange={(e) => setMajor(e.target.value)}
+                                        placeholder="e.g. Pre-med, Engineering..."
+                                        className="w-full bg-transparent border-b border-[#444] focus:border-[#b0beb8] outline-none py-2 text-white transition-colors placeholder-[#666] rounded-none font-typewriter text-sm"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-[11px] font-bold uppercase tracking-widest text-[#e5e5e5] mb-2">
+                                        Total Weekly Allocation (Hours)
+                                    </label>
+                                    <input 
+                                        type="number" 
+                                        min="1"
+                                        value={totalHours}
+                                        onChange={(e) => setTotalHours(Number(e.target.value))}
+                                        className="w-full bg-transparent border-b border-[#444] focus:border-[#b0beb8] outline-none py-2 text-white transition-colors placeholder-[#666] rounded-none font-typewriter text-sm"
+                                    />
+                                </div>
+                                
+                                <div>
+                                    <div className="flex justify-between items-center mb-4">
+                                        <label className="block text-[11px] font-bold uppercase tracking-widest text-[#e5e5e5]">
+                                            Curriculum Nodes (Max 6)
+                                        </label>
+                                        {setupClasses.length < 6 && (
+                                            <button 
+                                                onClick={addSetupClass}
+                                                className="text-[10px] uppercase tracking-wider text-[#b0beb8] hover:text-white transition-colors font-bold"
+                                            >
+                                                [+ Add Node]
+                                            </button>
+                                        )}
+                                    </div>
+                                    
+                                    <div className="space-y-4">
+                                        {setupClasses.map((cls, idx) => (
+                                            <div key={cls.id} className="flex gap-4 items-end">
+                                                <div className="text-[10px] text-[#d4d4d4] pb-2 font-bold">0{idx + 1}</div>
+                                                <input 
+                                                    type="text" 
+                                                    value={cls.name}
+                                                    onChange={(e) => updateSetupClassName(idx, e.target.value)}
+                                                    placeholder={`Subject ${idx + 1}`}
+                                                    className="w-full bg-transparent border-b border-[#444] focus:border-[#b0beb8] outline-none py-2 text-white transition-colors placeholder-[#666] rounded-none font-typewriter text-sm"
+                                                />
+                                                {setupClasses.length > 1 && (
+                                                    <button 
+                                                        onClick={() => removeSetupClass(idx)}
+                                                        className="text-[10px] text-[#999] hover:text-[#f87171] transition-colors uppercase tracking-widest pb-2 font-bold"
+                                                        title="Remove Class"
+                                                    >
+                                                        [Drop]
+                                                    </button>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <button 
+                                    onClick={handleStart}
+                                    className="w-full bg-[#b0beb8] text-[#050505] font-bold py-4 mt-6 hover:bg-[#a1afa9] transition-colors text-xs uppercase tracking-[0.2em] rounded-none"
+                                >
+                                    Initialize Dashboard
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // ---------------- Render Main App View ----------------
+            const numClasses = classes.length;
+            return (
+                <div className="min-h-screen p-6 md:p-12 max-w-7xl mx-auto flex flex-col gap-12">
+                    
+                    {/* Header Controls */}
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 border-b border-[#2a2a2a] pb-8">
+                        <div>
+                            <h1 className="font-sage text-4xl md:text-5xl mb-2 text-white font-bold">{getGreeting(major)}</h1>
+                            <div className="flex items-center gap-4">
+                                <p className="font-typewriter text-[11px] text-[#d4d4d4] uppercase tracking-[0.15em]">
+                                    Total Framework: <span className="text-[#b0beb8] font-bold">{totalHours} Hours</span>/Week
+                                </p>
+                                <span className="text-[10px] text-[#999] tracking-widest uppercase">[{syncStatus}]</span>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={resetSetup}
+                            className="font-typewriter text-[10px] uppercase tracking-widest text-[#d4d4d4] hover:text-white transition-colors border border-[#333] hover:border-[#666] px-4 py-2 rounded-none font-bold"
+                        >
+                            &larr; Reconfigure
+                        </button>
+                    </div>
+
+                    {/* Visual Ratio Bar */}
+                    <div className="w-full flex flex-col gap-3">
+                        <div className="flex justify-between items-center">
+                            <div className="text-[10px] font-bold text-[#d4d4d4] uppercase tracking-[0.2em]">Distribution Matrix</div>
+                            <div className="text-[10px] font-bold text-[#d4d4d4] uppercase tracking-widest">100% Volume</div>
+                        </div>
+                        <div className="w-full h-8 flex overflow-hidden border border-[#222]">
+                            {classes.map(cls => {
+                                const percentage = totalHours > 0 ? (cls.hours / totalHours) * 100 : 0;
+                                return (
+                                    <div 
+                                        key={cls.id} 
+                                        style={{ width: `${percentage}%`, backgroundColor: cls.color }}
+                                        className="h-full transition-all duration-300 flex items-center justify-center min-w-[20px] relative group border-r border-[#050505] last:border-r-0"
+                                    >
+                                        {/* Hover Tooltip */}
+                                        <div className="absolute -top-12 opacity-0 group-hover:opacity-100 transition-opacity bg-[#111] text-[#f5f5f5] text-[10px] font-typewriter py-1 px-3 border border-[#333] whitespace-nowrap z-10 pointer-events-none rounded-none tracking-widest shadow-xl">
+                                            {cls.name} / {cls.hours.toFixed(1)}h
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {/* Class Controls / Sliders */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {classes.map((cls, index) => {
+                            let maxAllowed = totalHours;
+                            let neighborIndex = -1;
+                            
+                            if (numClasses > 1 && !cls.isPinned) {
+                                neighborIndex = findNeighbor(classes, index);
+                                if (neighborIndex !== -1) {
+                                    maxAllowed = cls.hours + classes[neighborIndex].hours;
+                                } else {
+                                    maxAllowed = cls.hours;
+                                }
+                            } else if (cls.isPinned) {
+                                maxAllowed = cls.hours;
+                            }
+
+                            return (
+                                <div 
+                                    key={cls.id}
+                                    draggable={dragEnabled === index}
+                                    onDragStart={() => (dragItem.current = index)}
+                                    onDragEnter={() => (dragOverItem.current = index)}
+                                    onDragEnd={handleSort}
+                                    onDragOver={(e) => e.preventDefault()}
+                                    className={`bg-[#0b0b0b] p-6 relative flex flex-col gap-6 transition-all group ${cls.isPinned ? 'border border-[#b0beb8] shadow-[0_0_15px_rgba(176,190,184,0.05)]' : 'border border-[#222] hover:border-[#444]'}`}
+                                >
+                                    {/* Drag Handle (Hamburger) */}
+                                    <div 
+                                        className="w-full h-6 flex justify-center items-center cursor-grab active:cursor-grabbing text-[#666] hover:text-[#d4d4d4] transition-colors absolute top-1 left-0 right-0 z-10"
+                                        onMouseEnter={() => setDragEnabled(index)}
+                                        onMouseLeave={() => setDragEnabled(null)}
+                                        onTouchStart={() => setDragEnabled(index)}
+                                        onTouchEnd={() => setDragEnabled(null)}
+                                    >
+                                        <svg width="20" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square">
+                                            <line x1="2" y1="2" x2="22" y2="2"></line>
+                                            <line x1="2" y1="6" x2="22" y2="6"></line>
+                                            <line x1="2" y1="10" x2="22" y2="10"></line>
+                                        </svg>
+                                    </div>
+
+                                    {/* Color Indicator Strip */}
+                                    <div className="absolute top-0 left-0 w-full h-[2px]" style={{ backgroundColor: cls.color }}></div>
+                                    
+                                    <div className="flex justify-between items-end gap-4 mt-4">
+                                        <input 
+                                            type="text" 
+                                            value={cls.name}
+                                            onChange={(e) => handleNameChange(index, e.target.value)}
+                                            className="font-sage text-2xl font-bold bg-transparent border-b border-transparent focus:border-[#666] outline-none w-full truncate transition-colors placeholder-[#666] text-white"
+                                            placeholder="Node Name"
+                                        />
+                                        <div className="text-right shrink-0 flex items-start gap-4">
+                                            <button 
+                                                onClick={() => togglePin(index)}
+                                                className={`text-[14px] transition-all pt-1 ${cls.isPinned ? 'text-[#b0beb8]' : 'text-[#666] hover:text-[#d4d4d4]'}`}
+                                                title={cls.isPinned ? "Unpin (allow adjustments)" : "Pin (lock hours)"}
+                                            >
+                                                📌
+                                            </button>
+                                            <div className="flex flex-col items-end">
+                                                <div className="font-typewriter text-xl font-bold" style={{ color: cls.color }}>
+                                                    {cls.hours.toFixed(1)}
+                                                </div>
+                                                <div className="text-[9px] font-bold text-[#d4d4d4] uppercase tracking-widest mt-1">Hrs</div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {numClasses > 1 && (
+                                        <div className="mt-4 transition-opacity duration-300" style={{ opacity: (cls.isPinned || neighborIndex === -1) ? 0.3 : 1 }}>
+                                            <input 
+                                                type="range"
+                                                min="0"
+                                                max={maxAllowed}
+                                                step="0.5"
+                                                value={cls.hours}
+                                                onChange={(e) => handleSliderChange(index, e.target.value)}
+                                                disabled={cls.isPinned || neighborIndex === -1}
+                                                className={(cls.isPinned || neighborIndex === -1) ? "cursor-not-allowed" : ""}
+                                            />
+                                            <div className="flex justify-between text-[9px] font-bold text-[#d4d4d4] mt-3 uppercase tracking-widest">
+                                                <span>0.0</span>
+                                                <span className="text-white">
+                                                    {cls.isPinned 
+                                                        ? '[ Locked ]' 
+                                                        : (neighborIndex !== -1 
+                                                            ? `Link \u2192 ${classes[neighborIndex].name}` 
+                                                            : '[ Isolated ]')}
+                                                </span>
+                                                <span>{maxAllowed.toFixed(1)}</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {numClasses === 1 && (
+                                        <div className="text-[10px] font-bold text-[#d4d4d4] mt-4 uppercase tracking-widest text-center border-t border-[#222] pt-4">
+                                            [ 100% capacity allocated ]
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
